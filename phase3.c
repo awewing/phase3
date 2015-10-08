@@ -1,22 +1,32 @@
+/*------------------------------------------------------------------------
+   phase3.c
+
+   University of Arizona
+   Computer Science 452
+
+   @Authors
+    -Andre Takagi
+    -Alex Ewing
+  ------------------------------------------------------------------------ */
 #include <usloss.h>
 #include <phase1.h>
 #include <phase2.h>
 #include <phase3.h>
 #include <usyscall.h>
 
+/* ------------------------- Prototypes ----------------------------------- */
+void check_kernel_mode(char* name);
 
-int
-start2(char *arg)
-{
+/* ------------------------- Functions ------------------------------------ */
+int start2(char *arg) {
     int pid;
     int status;
-    /*
-     * Check kernel mode here.
-     */
-
-    /*
-     * Data structure initialization as needed...
-     */
+    
+    // Check kernel mode here.
+    check_kernel_mode("start2");
+    
+    // Data structure initialization as needed...
+     
 
 
     /*
@@ -57,3 +67,12 @@ start2(char *arg)
 
 } /* start2 */
 
+/*
+ * Checks if we are in Kernel mode
+ */
+void check_kernel_mode(char *name) {
+    if ((USLOSS_PSR_CURRENT_MODE & USLOSS_PsrGet()) == 0) {
+        USLOSS_Console("%s(): Called while in user mode by process %d. Halting...\n", name, getpid());
+        USLOSS_Halt(1);
+    }
+}
