@@ -15,6 +15,8 @@
 #include <usyscall.h>
 
 /* ------------------------- Prototypes ----------------------------------- */
+static void nullsys3(systemArgs *args);
+static void syscallHandler(int dec, void *args);
 void check_kernel_mode(char* name);
 
 /* ------------------------- Functions ------------------------------------ */
@@ -26,7 +28,7 @@ int start2(char *arg) {
     check_kernel_mode("start2");
     
     // Data structure initialization as needed...
-     
+    USLOSS_IntVec[USLOSS_SYSCALL_INT] = syscallHandler; 
 
 
     /*
@@ -66,6 +68,31 @@ int start2(char *arg) {
     pid = waitReal(&status);
 
 } /* start2 */
+
+static void nullsys3(systemArgs *args) {
+    USLOSS_Console("nullsys(): Invalid syscall %d. Halting...\n", args->number);
+    USLOSS_Halt(1);
+}
+
+static void syscallHandler(int dev, void *args) {
+    // get args
+    systemArgs *sysPtr = (systemArgs *) args;
+
+    // check if valid dev
+    if (dev != USLOSS_SYSCALL_INT) {
+        USLOSS_Console("syscallHandler(): Bad call\n");
+        USLOSS_Halt(1);
+    }
+
+    // check if valid range of args
+    if (sysPtr->number < 0 || sysPtr->number >= MAXSYSCALLS) {
+        USLOSS_Console("syscallHandler(): sys number %d is wrong.  Halting...\n", sysPtr->number);
+        USLOSS_Halt(1);
+    }
+
+    USLOSS_PsrSet( USLOSS_PsrGet() | USLOSS_PSR_CURRENT_INT);
+    sys_vec[sysPtr->number](sysPtr);
+}
 
 /*
  * Checks if we are in Kernel mode
