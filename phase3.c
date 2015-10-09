@@ -19,37 +19,39 @@
 #include <usyscall.h>
 /* ------------------------- Prototypes ----------------------------------- */
 static void nullsys3(systemArgs *args);
-static void Spawn(systemArgs *args);
-static void Wait(systemArgs *args);
-static void Terminate(systemArgs *args);
-static void SemCreate(systemArgs *args);
-static void SemP(systemArgs *args);
-static void SemV(systemArgs *args);
-static void SemFree(systemArgs *args);
-static void GetTimeofDay(systemArgs *args);
-static void CPUTime(systemArgs *args);
-static void GetPID(systemArgs *args);
+static void spawn(systemArgs *args);
+static void wait(systemArgs *args);
+static void terminate(systemArgs *args);
+static void semCreate(systemArgs *args);
+static void semP(systemArgs *args);
+static void semV(systemArgs *args);
+static void semFree(systemArgs *args);
+static void getTimeofDay(systemArgs *args);
+static void spuTime(systemArgs *args);
+static void getPID(systemArgs *args);
 
-int SpawnReal(char *name, int(*func)(char *), char *arg, int stacksize, int priority);
-int SpawnLaunch(char *args);
-int WaitReal(int *status);
-void TerminateReal(int status);
-int SemCreateReal(systemArgs *args);
-int SemPReal(systemArgs *args);
-int SemVReal(systemArgs *args);
-int SemFreeReal(systemArgs *args);
-void GetTimeofDayReal(systemArgs *args);
-void CPUTimeReal(systemArgs *args);
-void GetPIDReal(systemArgs *args);
+int spawnReal(char *name, int(*func)(char *), char *arg, int stacksize, int priority);
+int spawnLaunch(char *args);
+int waitReal(int *status);
+void terminateReal(int status);
+int semCreateReal(systemArgs *args);
+int semPReal(systemArgs *args);
+int semVReal(systemArgs *args);
+int semFreeReal(systemArgs *args);
+void getTimeofDayReal(systemArgs *args);
+void cpuTimeReal(systemArgs *args);
+void getPIDReal(systemArgs *args);
 
 static void syscallHandler(int dec, void *args);
 void check_kernel_mode(char* name);
 /* ------------------------- Globals ------------------------------------ */
 void (*sys_vec[MAXSYSCALLS])(systemArgs *args);
 
-//process table
-//semtable
+process ProcTable[MAXPROC];
+semaphore SemTable[MAXSEMS];
 
+int numProcs = 3;
+int current = 3;
 /* ------------------------- Functions ------------------------------------ */
 int start2(char *arg) {
     int pid;
@@ -79,6 +81,22 @@ int start2(char *arg) {
     sys_vec[SYS_CPUTIME] = CPUTime;
     sys_vec[SYS_GETPID] = GetPID;
 
+    // initialize ProcTable
+    for (int i = 0; i < MAXPROC; i++) {
+        ProcTable[i].name[0] = '\0';
+        ProcTable[i].startArg[MAXARG] = '\0';
+        ProcTable[i].ppid = -1;
+        ProcTable[i].priority = -1;
+        ProcTable[i].start_func = NULL;
+        ProcTable[i].stackSize = -1;
+        ProcTable[i].status = -1;
+        ProcTable[i].numKids = -1;
+    }
+
+    // initialize SemTable
+    for (int i = 0; i < MAXSEMS; i++) {
+    }
+
     /*
      * Create first user-level process and wait for it to finish.
      * These are lower-case because they are not system calls;
@@ -107,7 +125,7 @@ int start2(char *arg) {
      * values back into the sysargs pointer, switch to user-mode, and 
      * return to the user code that called Spawn.
      */
-    pid = SpawnReal("start3", start3, NULL,  4 * USLOSS_MIN_STACK, 3);
+    pid = spawnReal("start3", start3, NULL,  4 * USLOSS_MIN_STACK, 3);
 
     /* Call the waitReal version of your wait code here.
      * You call waitReal (rather than Wait) because start2 is running
@@ -122,88 +140,114 @@ static void nullsys3(systemArgs *args) {
     USLOSS_Halt(1); // TODO change this from halt to terminate
 }
 
-static void Spawn(systemArgs *args) {
-    SpawnReal(args.arg5, args.arg1, args.arg2, args.arg3, args.arg4);    
+static void spawn(systemArgs *args) {
+    // values to send to spawn real
+    char *name;
+    int (*func)(char *);
+    char *arg;
+    int stacksize;
+    int priority;
+
+    // check values are real
+    
+
+    // all values good, assign them
+    name = args.arg5;
+    func = args.arg1;
+    arg  = args.arg2;
+    stacksize = args.arg3;
+    priority = args.arg4;
+
+    // call spawn real
+    spawnReal(name, func, arg, stacksize, priority);    
 }
 
-static void Wait(systemArgs *args) {
-    WaitReal();
+static void wait(systemArgs *args) {
+    waitReal();
 }
 
-static void Terminate(systemArgs *args) {
-    TerminateReal();
+static void terminate(systemArgs *args) {
+    terminateReal();
 }
 
-static void SemCreate(systemArgs *args) {
-    SemCreateReal();
+static void semCreate(systemArgs *args) {
+    semCreateReal();
 }
 
-static void SemP(systemArgs *args) {
-    SemPReal();
+static void semP(systemArgs *args) {
+    semPReal();
 }
 
-static void SemV(systemArgs *args) {
-    SemVReal();
+static void semV(systemArgs *args) {
+    semVReal();
 }
 
-static void SemFree(systemArgs *args) {
-    SemFreeReal();
+static void semFree(systemArgs *args) {
+    semFreeReal();
 }
 
-static void GetTimeofDay(systemArgs *args) {
-    GetTimeofDayReal();
+static void getTimeofDay(systemArgs *args) {
+    getTimeofDayReal();
 }
 
-static void CPUTime(systemArgs *args) {
-    CPUTimeReal();
+static void cpuTime(systemArgs *args) {
+    cpuTimeReal();
 }
 
-static void GetPID(systemArgs *args) {
-    GetPIDReal();
+static void getPID(systemArgs *args) {
+    getPIDReal();
 }
 
-int SpawnReal(char *name, int(*func)(char *), char *arg, int stacksize, int priority) {
-    int kidpid = fork1(name, spawnlaunch, arg, stacksize, priority);
+int spawnReal(char *name, int(*func)(char *), char *arg, int stacksize, int priority) {
+    ProcTable[]
+
+    int kidpid = fork1(name, spawnLaunch, NULL, stacksize, priority);
     // put kidpid in process table?
 }
 
-int SpawnLaunch(char *args) {
-    // create
+int spawnLaunch(char *args) {
+    int result;
+
+    if (!isZapped()) {
+        result = ProcTable[getpid() % MAXPROC].start_func(ProcTable[getpid() % MAXPROC].startArg);
+    
+        terminate(result);
+    }
 }
 
-int WaitReal(int *status) {
-
-}
-
-int TerminateReal(int status) {
-
-}
-
-int SemCreateReal(systemArgs *args) {
-
-}
-
-int SemPReal(systemArgs *args) {
+int waitReal(int *status) {
 
 }
 
-int SemVReal(systemArgs *args) {
+int terminateReal(int status) {
 
 }
 
-int SemFreeReal(systemArgs *args) {
+int semCreateReal(systemArgs *args) {
 
 }
 
-int GetTimeofDayReal(systemArgs *args) {
+int semPReal(systemArgs *args) {
 
 }
 
-int CPUTimeReal(systemArgs *args) {
+int semVReal(systemArgs *args) {
 
 }
 
-int GetPIDReal(systemArgs *args) {
+int semFreeReal(systemArgs *args) {
+
+}
+
+int getTimeofDayReal(systemArgs *args) {
+
+}
+
+int cpuTimeReal(systemArgs *args) {
+
+}
+
+int getPIDReal(systemArgs *args) {
 
 }
 
