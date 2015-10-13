@@ -19,6 +19,8 @@
 #include <sems.h>
 #include <usyscall.h>
 /* ------------------------- Prototypes ----------------------------------- */
+extern int start3(char *);
+
 static void nullsys3(systemArgs *args);
 static void spawn(systemArgs *args);
 static void wait(systemArgs *args);
@@ -88,6 +90,8 @@ int start2(char *arg) {
 
     // initialize ProcTable
     for (int i = 0; i < MAXPROC; i++) {
+        ProcTable[i].childProcPtr = NULL;
+        ProcTable[i].nextSiblingPtr = NULL;
         ProcTable[i].name[0] = '\0';
         ProcTable[i].startArg[0] = '\0';
         ProcTable[i].pid = -1;
@@ -96,6 +100,7 @@ int start2(char *arg) {
         ProcTable[i].start_func = NULL;
         ProcTable[i].stackSize = -1;
         ProcTable[i].numKids = -1;
+        ProcTable[i].mbox = MboxCreate(MAXPROC, MAXLINE);
     }
 
     // initialize SemTable
@@ -105,10 +110,7 @@ int start2(char *arg) {
     // create mutex mailbox
     ptMutex = MboxCreate(1, 0);
     stMutex = MboxCreate(1, 0);
-
-    childDone = MboxCreate(0, 0);
-
-    ptCom = MboxCreate(20, 100);
+    //childQuit = MboxCreate(50, 0
 
     /*
      * Create first user-level process and wait for it to finish.
@@ -138,6 +140,8 @@ int start2(char *arg) {
      * values back into the sysargs pointer, switch to user-mode, and 
      * return to the user code that called Spawn.
      */
+    USLOSS_PsrSet(0);
+
     int pid;
     pid = spawnReal("start3", start3, NULL,  4 * USLOSS_MIN_STACK, 3);
 
@@ -155,7 +159,7 @@ int start2(char *arg) {
 
 static void nullsys3(systemArgs *args) {
     USLOSS_Console("nullsys(): Invalid syscall %d. Halting...\n", args->number);
-    USLOSS_Halt(1); // TODO change this from halt to terminate
+    terminateReal(1);
 }
 
 static void spawn(systemArgs *args) {
@@ -173,32 +177,34 @@ static void spawn(systemArgs *args) {
     name = args->arg5;
     func = args->arg1;
     arg  = args->arg2;
-    stacksize = args->arg3;
-    priority = args->arg4;
+    stacksize = *((int *)args->arg3);
+    priority = *((int *)args->arg4);
 
     // call spawn real
     int pid = spawnReal(name, func, arg, stacksize, priority);    
 
-    args->arg1 = pid;
+    args->arg1 = &pid;
     args->arg4 = 0;
 }
 
 static void wait(systemArgs *args) {
     int *code;
+    int result = waitReal(code);
 
-    args->arg1 = waitReal(code);
-    arg2->arg2 = code;
+    args->arg1 = &result;
+    args->arg2 = code;
 
-    if (ProcTable[getpid()].numkids == 0) {
-        args->arg4 = -1;
+    int success = 0;
+    if (ProcTable[getpid()].numKids == 0) {
+        success = -1;
     }
-    else {
-        args->arg4 = 0;
-    }
+    
+    args->arg4 = &success;
 }
 
 static void terminate(systemArgs *args) {
-    terminateReal(&args.arg1);
+    int code = *((int *)args->arg1);
+    terminateReal(code);
 }
 
 static void semCreate(systemArgs *args) {
@@ -231,62 +237,85 @@ static void getPID(systemArgs *args) {
 
 int spawnReal(char *name, int(*func)(char *), char *arg, unsigned int stackSize, int priority) {
     MboxSend(ptMutex, NULL, 0);
-
-    MboxSend(ptCom, name, 100);
-    MboxSend(ptCom, arg, 100);
-    MboxSend(ptCom, &priority, 100);
-    MboxSend(ptCom, func, 100);
-    MboxSend(ptCom, &stackSize, 100);
-
-    int kidpid = fork1(name, spawnLaunch, NULL, stackSize, priority);
+    int kidpid = fork1(name, spawnLaunch, arg, stackSize, priority);
 
     int slot = kidpid % MAXPROC;
+    strcpy(ProcTable[slot].name, name);
+    if (arg == NULL) {
+        ProcTable[slot].startArg[0] = '\0';
+    }
+    else {
+        memcpy(ProcTable[slot].startArg, arg, MAXARG);
+    }
+    ProcTable[slot].priority = priority;
+    ProcTable[slot].start_func = func;
+    ProcTable[slot].stackSize = stackSize;
     ProcTable[slot].ppid = getpid();
     addChild(getpid(), kidpid);
 
-    MboxReceive(childDone, NULL, 0);
+    MboxSend(ProcTable[slot].mbox, NULL, 0);
     MboxReceive(ptMutex, NULL, 0);
     return kidpid;
 }
 
 int spawnLaunch(char *args) {
-    int pid = getpid();
-    int slot = (pid % MAXPROC);
+    process me = ProcTable[getpid() % MAXPROC];
 
-    MboxReceive(ptCom, ProcTable[slot].name, 100);
-    MboxReceive(ptCom, ProcTable[slot].startArg, 100);
-    MboxReceive(ptCom, &ProcTable[slot].priority, 100);
-    MboxReceive(ptCom, ProcTable[slot].start_func, 100);
-    MboxReceive(ptCom, &ProcTable[slot].stackSize, 100);
+    me.pid = getpid();
 
-    MboxSend(childDone, NULL, 0);
+    MboxReceive(me.mbox, NULL, 0);
 
     int result = -1;
     if (!isZapped()) {
-        result = ProcTable[getpid() % MAXPROC].start_func(ProcTable[getpid() % MAXPROC].startArg);
+        result = me.start_func(me.startArg);
     
         terminateReal(result);
     }
 
-    // TODO ask nathan what to return
     return result;
 }
 
 int waitReal(int *status) {
-    return join(*status);
+    return join(status);
 }
 
 void terminateReal(int status) {
-    //TODO what are we doing with status???
+    if (ProcTable[getpid() % MAXPROC].numKids == 0) {
+        quit(status);
+        return;
+    }
 
     // go through all children
-    for (int i = 0; i < ProcTable[getpid()]; i++) {
+    for (int i = 0; i < ProcTable[getpid()].numKids; i++) {
         // zap child
         zap(ProcTable[getpid()].childProcPtr->pid);
         
         // remove child
         ProcTable[getpid()].childProcPtr = ProcTable[getpid()].childProcPtr->nextSiblingPtr;
     }
+
+    // remove this process from its parents list of processes
+    procPtr parent = &ProcTable[ProcTable[getpid()].ppid];
+
+    for (procPtr child = parent->childProcPtr; child->nextSiblingPtr != NULL; 
+                                                child = child->nextSiblingPtr) {
+        // find yourself in your parents child list
+        if (child->nextSiblingPtr->pid == getpid()) {
+            // derefrence yourself in the list
+            child->nextSiblingPtr = child->nextSiblingPtr->nextSiblingPtr;
+
+            // dec the parents kids
+            parent->numKids--;
+
+            break;
+        }
+    }
+
+    // wait for all children to to finish terminating before leaving
+    //can we even mbox receive? how will children send?
+
+    // quit
+    quit(status);
 }
 
 int semCreateReal(systemArgs *args) {
@@ -350,7 +379,12 @@ static void syscallHandler(int dev, void *args) {
     USLOSS_PsrSet( USLOSS_PsrGet() | USLOSS_PSR_CURRENT_INT);
     sys_vec[sysPtr->number](sysPtr);
 }
-
+/*
+void setUserMode() {
+    unsigned int psr = USLOSS_PSRGet();
+    
+}
+*/
 /*
  * Checks if we are in Kernel mode
  */

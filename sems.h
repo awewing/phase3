@@ -9,7 +9,7 @@ typedef struct semStruct * semPtr;
 struct procStruct {
    procPtr         childProcPtr;
    procPtr         nextSiblingPtr;
-   procPtr         quitChildPtr;
+//   procPtr         quitChildPtr;
    char            name[MAXNAME];     /* process's name */
    char            startArg[MAXARG];  /* args passed to process */
    short           pid;               /* process id */
@@ -19,6 +19,7 @@ struct procStruct {
    unsigned int    stackSize;
 //   int             status; 
    int             numKids;
+   int             mbox;
 };
 
 struct semStruct {
