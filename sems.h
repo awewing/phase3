@@ -7,6 +7,9 @@ typedef struct semStruct semaphore;
 typedef struct semStruct * semPtr;
 
 struct procStruct {
+   procPtr         childProcPtr;
+   procPtr         nextSiblingPtr;
+   procPtr         quitChildPtr;
    char            name[MAXNAME];     /* process's name */
    char            startArg[MAXARG];  /* args passed to process */
    short           pid;               /* process id */
@@ -14,7 +17,7 @@ struct procStruct {
    int             priority;
    int (* start_func) (char *);       /* function where process begins -- launch */
    unsigned int    stackSize;
-   int             status; 
+//   int             status; 
    int             numKids;
 };
 
