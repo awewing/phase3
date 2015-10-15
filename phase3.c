@@ -49,6 +49,7 @@ void addChild(int parentID, int childID);
 static void syscallHandler(int dec, void *args);
 void check_kernel_mode(char* name);
 /* ------------------------- Globals ------------------------------------ */
+int debugflag3 = 1;
 void (*sys_vec[MAXSYSCALLS])(systemArgs *args);
 
 process ProcTable[MAXPROC];
@@ -380,11 +381,25 @@ static void syscallHandler(int dev, void *args) {
     sys_vec[sysPtr->number](sysPtr);
 }
 /*
+ * setUserMode
+ *
+ *  Will basically change the current mode
+ *     user --> kernel
+ *     kernel --> user
+ */
 void setUserMode() {
-    unsigned int psr = USLOSS_PSRGet();
-    
+    //TODO: test
+
+    unsigned int psr = USLOSS_PsrGet();
+    unsigned int newPsr = psr ^ 00000001;
+
+    if (debugflag3) {
+        USLOSS_Console("curr psr = %d\n", psr);
+        USLOSS_Console("new psr = %d\n", newPsr);
+    }
+    USLOSS_PsrSet(newPsr);
 }
-*/
+
 /*
  * Checks if we are in Kernel mode
  */
