@@ -45,12 +45,13 @@ void getTimeofDayReal(systemArgs *args);
 void cpuTimeReal(systemArgs *args);
 void getPIDReal(systemArgs *args);
 
+void setUserMode();
 void addChild(int parentID, int childID);
-static void syscallHandler(int dec, void *args);
+//static void syscallHandler(int dec, void *args);
 void check_kernel_mode(char* name);
 /* ------------------------- Globals ------------------------------------ */
 int debugflag3 = 1;
-void (*sys_vec[MAXSYSCALLS])(systemArgs *args);
+//void (*sys_vec[MAXSYSCALLS])(systemArgs *args);
 
 process ProcTable[MAXPROC];
 semaphore SemTable[MAXSEMS];
@@ -69,25 +70,23 @@ int start2(char *arg) {
     check_kernel_mode("start2");
     
     // Data structure initialization as needed...
-    USLOSS_IntVec[USLOSS_SYSCALL_INT] = syscallHandler; 
-
     // initialize sys_vec
     // initialize everything to nullsys3
     for (int i = 0; i < MAXSYSCALLS; i++) {
-        sys_vec[i] = nullsys3;
+        systemCallVec[i] = nullsys3;
     }
 
     // fill specified ones with their specific functions
-    sys_vec[SYS_SPAWN] = spawn;
-    sys_vec[SYS_WAIT] = waitt;
-    sys_vec[SYS_TERMINATE] = terminate;
-    sys_vec[SYS_SEMCREATE] = semCreate;
-    sys_vec[SYS_SEMP] = semP;
-    sys_vec[SYS_SEMV] = semV;
-    sys_vec[SYS_SEMFREE] = semFree;
-    sys_vec[SYS_GETTIMEOFDAY] = getTimeofDay;
-    sys_vec[SYS_CPUTIME] = cpuTime;
-    sys_vec[SYS_GETPID] = getPID;
+    systemCallVec[SYS_SPAWN] = spawn;
+    systemCallVec[SYS_WAIT] = waitt;
+    systemCallVec[SYS_TERMINATE] = terminate;
+    systemCallVec[SYS_SEMCREATE] = semCreate;
+    systemCallVec[SYS_SEMP] = semP;
+    systemCallVec[SYS_SEMV] = semV;
+    systemCallVec[SYS_SEMFREE] = semFree;
+    systemCallVec[SYS_GETTIMEOFDAY] = getTimeofDay;
+    systemCallVec[SYS_CPUTIME] = cpuTime;
+    systemCallVec[SYS_GETPID] = getPID;
 
     // initialize ProcTable
     for (int i = 0; i < MAXPROC; i++) {
@@ -141,8 +140,6 @@ int start2(char *arg) {
      * values back into the sysargs pointer, switch to user-mode, and 
      * return to the user code that called Spawn.
      */
-    USLOSS_PsrSet(0);
-
     int pid;
     pid = spawnReal("start3", start3, NULL,  4 * USLOSS_MIN_STACK, 3);
 
@@ -178,8 +175,8 @@ static void spawn(systemArgs *args) {
     name = args->arg5;
     func = args->arg1;
     arg  = args->arg2;
-    stacksize = *((int *)args->arg3);
-    priority = *((int *)args->arg4);
+    stacksize = (long) args->arg3;//*((int *)args->arg3);
+    priority = (long) args->arg4;//*((int *)args->arg4);
 
     // call spawn real
     int pid = spawnReal(name, func, arg, stacksize, priority);    
@@ -189,6 +186,7 @@ static void spawn(systemArgs *args) {
 }
 
 static void waitt(systemArgs *args) {
+//setUserMode();
     int *code;
     int result = waitReal(code);
 
@@ -204,7 +202,8 @@ static void waitt(systemArgs *args) {
 }
 
 static void terminate(systemArgs *args) {
-    int code = *((int *)args->arg1);
+//setUserMode();
+    int code = (long) args->arg1;
     terminateReal(code);
 }
 
@@ -242,11 +241,8 @@ int spawnReal(char *name, int(*func)(char *), char *arg, unsigned int stackSize,
 
     int slot = kidpid % MAXPROC;
     strcpy(ProcTable[slot].name, name);
-    if (arg == NULL) {
-        ProcTable[slot].startArg[0] = '\0';
-    }
-    else {
-        memcpy(ProcTable[slot].startArg, arg, MAXARG);
+    if (arg != NULL) {
+        strcpy(ProcTable[slot].startArg, arg);
     }
     ProcTable[slot].priority = priority;
     ProcTable[slot].start_func = func;
@@ -256,6 +252,7 @@ int spawnReal(char *name, int(*func)(char *), char *arg, unsigned int stackSize,
 
     MboxSend(ProcTable[slot].mbox, NULL, 0);
     MboxReceive(ptMutex, NULL, 0);
+
     return kidpid;
 }
 
@@ -268,21 +265,33 @@ int spawnLaunch(char *args) {
 
     int result = -1;
     if (!isZapped()) {
-        result = me.start_func(me.startArg);
+        setUserMode();
+
+        int (*func)(char *) = me.start_func;
+        char arg[MAXARG];
+        strcpy(arg, me.startArg);
+
+        result = (func)(arg);
     
-        terminateReal(result);
+        Terminate(result);
+    }
+    else {
+        terminateReal(0);
     }
 
     return result;
 }
 
 int waitReal(int *status) {
-    return join(status);
+    int result = join(status);
+setUserMode();
+    return result;
 }
 
 void terminateReal(int status) {
     if (ProcTable[getpid() % MAXPROC].numKids == 0) {
         quit(status);
+setUserMode();
         return;
     }
 
@@ -317,6 +326,7 @@ void terminateReal(int status) {
 
     // quit
     quit(status);
+setUserMode();
 }
 
 int semCreateReal(systemArgs *args) {
@@ -360,7 +370,7 @@ void addChild(int parentID, int childID) {
         child->nextSiblingPtr = &ProcTable[childID];
     }
 }
-
+/*
 static void syscallHandler(int dev, void *args) {
     // get args
     systemArgs *sysPtr = (systemArgs *) args;
@@ -379,7 +389,7 @@ static void syscallHandler(int dev, void *args) {
 
     USLOSS_PsrSet( USLOSS_PsrGet() | USLOSS_PSR_CURRENT_INT);
     sys_vec[sysPtr->number](sysPtr);
-}
+}*/
 /*
  * setUserMode:
  *  kernel --> user
