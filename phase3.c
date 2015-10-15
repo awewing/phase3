@@ -23,7 +23,7 @@ extern int start3(char *);
 
 static void nullsys3(systemArgs *args);
 static void spawn(systemArgs *args);
-static void wait(systemArgs *args);
+static void waitt(systemArgs *args);
 static void terminate(systemArgs *args);
 static void semCreate(systemArgs *args);
 static void semP(systemArgs *args);
@@ -79,7 +79,7 @@ int start2(char *arg) {
 
     // fill specified ones with their specific functions
     sys_vec[SYS_SPAWN] = spawn;
-    sys_vec[SYS_WAIT] = wait;
+    sys_vec[SYS_WAIT] = waitt;
     sys_vec[SYS_TERMINATE] = terminate;
     sys_vec[SYS_SEMCREATE] = semCreate;
     sys_vec[SYS_SEMP] = semP;
@@ -188,7 +188,7 @@ static void spawn(systemArgs *args) {
     args->arg4 = 0;
 }
 
-static void wait(systemArgs *args) {
+static void waitt(systemArgs *args) {
     int *code;
     int result = waitReal(code);
 
@@ -381,23 +381,11 @@ static void syscallHandler(int dev, void *args) {
     sys_vec[sysPtr->number](sysPtr);
 }
 /*
- * setUserMode
- *
- *  Will basically change the current mode
- *     user --> kernel
- *     kernel --> user
+ * setUserMode:
+ *  kernel --> user
  */
 void setUserMode() {
-    //TODO: test
-
-    unsigned int psr = USLOSS_PsrGet();
-    unsigned int newPsr = psr ^ 00000001;
-
-    if (debugflag3) {
-        USLOSS_Console("curr psr = %d\n", psr);
-        USLOSS_Console("new psr = %d\n", newPsr);
-    }
-    USLOSS_PsrSet(newPsr);
+    USLOSS_PsrSet(USLOSS_PsrGet() & ~USLOSS_PSR_CURRENT_MODE);
 }
 
 /*
