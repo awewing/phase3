@@ -19,7 +19,8 @@ struct procStruct {
    unsigned int    stackSize;
 //   int             status; 
    int             numKids;
-   int             mbox;
+   int             spawnBox;          // Mbox used to coordinate creating
+   int             quitBox;           // Mbox used to coordinate quiting
 };
 
 struct semStruct {

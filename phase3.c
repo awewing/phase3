@@ -18,6 +18,7 @@
 #include <phase3.h>
 #include <sems.h>
 #include <usyscall.h>
+#include <libuser.h>
 /* ------------------------- Prototypes ----------------------------------- */
 extern int start3(char *);
 
@@ -29,38 +30,36 @@ static void semCreate(systemArgs *args);
 static void semP(systemArgs *args);
 static void semV(systemArgs *args);
 static void semFree(systemArgs *args);
-static void getTimeofDay(systemArgs *args);
+static void getTimeOfDay(systemArgs *args);
 static void cpuTime(systemArgs *args);
 static void getPID(systemArgs *args);
 
 int spawnReal(char *name, int(*func)(char *), char *arg, unsigned int stackSize, int priority);
 int spawnLaunch(char *args);
-int waitReal(int *status);
+int waitReal(long *status);
 void terminateReal(int status);
 int semCreateReal(systemArgs *args);
 int semPReal(systemArgs *args);
 int semVReal(systemArgs *args);
 int semFreeReal(systemArgs *args);
-void getTimeofDayReal(systemArgs *args);
+void getTimeOfDayReal(systemArgs *args);
 void cpuTimeReal(systemArgs *args);
 void getPIDReal(systemArgs *args);
 
-void setUserMode();
 void addChild(int parentID, int childID);
-//static void syscallHandler(int dec, void *args);
+void removeChild(int parentID, int childID);
+
+void setUserMode();
 void check_kernel_mode(char* name);
 /* ------------------------- Globals ------------------------------------ */
-int debugflag3 = 1;
-//void (*sys_vec[MAXSYSCALLS])(systemArgs *args);
+int debugflag3 = 0;
+int debugflag3v = 0;
 
 process ProcTable[MAXPROC];
 semaphore SemTable[MAXSEMS];
 
 int ptMutex;
 int stMutex;
-int childDone;
-
-int ptCom;
 
 int numProcs = 3;
 int current = 3;
@@ -84,7 +83,7 @@ int start2(char *arg) {
     systemCallVec[SYS_SEMP] = semP;
     systemCallVec[SYS_SEMV] = semV;
     systemCallVec[SYS_SEMFREE] = semFree;
-    systemCallVec[SYS_GETTIMEOFDAY] = getTimeofDay;
+    systemCallVec[SYS_GETTIMEOFDAY] = getTimeOfDay;
     systemCallVec[SYS_CPUTIME] = cpuTime;
     systemCallVec[SYS_GETPID] = getPID;
 
@@ -99,8 +98,9 @@ int start2(char *arg) {
         ProcTable[i].priority = -1;
         ProcTable[i].start_func = NULL;
         ProcTable[i].stackSize = -1;
-        ProcTable[i].numKids = -1;
-        ProcTable[i].mbox = MboxCreate(MAXPROC, MAXLINE);
+        ProcTable[i].numKids = 0;
+        ProcTable[i].spawnBox = MboxCreate(0, MAXLINE);
+        ProcTable[i].quitBox = MboxCreate(MAXPROC, MAXLINE);
     }
 
     // initialize SemTable
@@ -110,7 +110,6 @@ int start2(char *arg) {
     // create mutex mailbox
     ptMutex = MboxCreate(1, 0);
     stMutex = MboxCreate(1, 0);
-    //childQuit = MboxCreate(50, 0
 
     /*
      * Create first user-level process and wait for it to finish.
@@ -147,7 +146,7 @@ int start2(char *arg) {
      * You call waitReal (rather than Wait) because start2 is running
      * in kernel (not user) mode.
      */
-    int status;
+    long status;
     if (pid > 0) {
         pid = waitReal(&status);
     }
@@ -156,11 +155,19 @@ int start2(char *arg) {
 } /* start2 */
 
 static void nullsys3(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: nullsys3\n", getpid());
+    }
+
     USLOSS_Console("nullsys(): Invalid syscall %d. Halting...\n", args->number);
     terminateReal(1);
 }
 
 static void spawn(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: spawn\n", getpid());
+    }
+
     // values to send to spawn real
     char *name;
     int (*func)(char *);
@@ -175,71 +182,131 @@ static void spawn(systemArgs *args) {
     name = args->arg5;
     func = args->arg1;
     arg  = args->arg2;
-    stacksize = (long) args->arg3;//*((int *)args->arg3);
-    priority = (long) args->arg4;//*((int *)args->arg4);
+    stacksize = (long) args->arg3;
+    priority = (long) args->arg4;
 
     // call spawn real
-    int pid = spawnReal(name, func, arg, stacksize, priority);    
+    long pid = spawnReal(name, func, arg, stacksize, priority);    
 
-    args->arg1 = &pid;
-    args->arg4 = 0;
+    // send the return info back
+    args->arg1 = (void *) pid;
+    args->arg4 = (void *) 0L;
+
+    // switch back to usermode
+    setUserMode();
 }
 
 static void waitt(systemArgs *args) {
-//setUserMode();
-    int *code;
-    int result = waitReal(code);
+    if (debugflag3) {
+        USLOSS_Console("process %d: waitt\n", getpid());
+    }
 
-    args->arg1 = &result;
-    args->arg2 = code;
+    // create space to save an int
+    long code;
 
-    int success = 0;
-    if (ProcTable[getpid()].numKids == 0) {
+    // pass a pointer of that int to waitReal
+    long result = waitReal(&code);
+
+    // a variabale that checks if the wait was successfull
+    long success = 0;
+
+    // if the waited on process had no kids it wasn't successful, set that
+    if (result == -2) {
         success = -1;
     }
-    
-    args->arg4 = &success;
+
+    // set the result of waitReal, code, and success to the system args
+    args->arg1 = (void *) result;
+    args->arg2 = (void *) code;
+    args->arg4 = (void *) success;
+
+    // switch back to user mode
+    setUserMode();
 }
 
 static void terminate(systemArgs *args) {
-//setUserMode();
+    if (debugflag3) {
+        USLOSS_Console("process %d: terminate\n", getpid());
+    }
+
+    // get the quit code from the system args
     int code = (long) args->arg1;
+
+    // quit with given code
     terminateReal(code);
+
+    // switch back to user mode
+    setUserMode();
 }
 
 static void semCreate(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: semCreate\n", getpid());
+    }
+
 //    semCreateReal();
 }
 
 static void semP(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: semP\n", getpid());
+    }
+
 //    semPReal();
 }
 
 static void semV(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: semV\n", getpid());
+    }
+
 //    semVReal();
 }
 
 static void semFree(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: semFree\n", getpid());
+    }
+
 //    semFreeReal();
 }
 
-static void getTimeofDay(systemArgs *args) {
-//    getTimeofDayReal();
+static void getTimeOfDay(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: getTimeOfDay\n", getpid());
+    }
+
+//    getTimeOfDayReal();
 }
 
 static void cpuTime(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: cpuTime\n", getpid());
+    }
+
 //    cpuTimeReal();
 }
 
 static void getPID(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: getPID\n", getpid());
+    }
+
 //    getPIDReal();
 }
 
 int spawnReal(char *name, int(*func)(char *), char *arg, unsigned int stackSize, int priority) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: spawnReal\n", getpid());
+    }
+
+    // block anyone from doing stuff with the process table
     MboxSend(ptMutex, NULL, 0);
     int kidpid = fork1(name, spawnLaunch, arg, stackSize, priority);
 
+    // add parameters to child's slot in the processtable
     int slot = kidpid % MAXPROC;
+    ProcTable[slot].pid = kidpid;
     strcpy(ProcTable[slot].name, name);
     if (arg != NULL) {
         strcpy(ProcTable[slot].startArg, arg);
@@ -248,33 +315,61 @@ int spawnReal(char *name, int(*func)(char *), char *arg, unsigned int stackSize,
     ProcTable[slot].start_func = func;
     ProcTable[slot].stackSize = stackSize;
     ProcTable[slot].ppid = getpid();
+
+    // add child to the cirrent process
     addChild(getpid(), kidpid);
 
-    MboxSend(ProcTable[slot].mbox, NULL, 0);
-    MboxReceive(ptMutex, NULL, 0);
+if(debugflag3v) USLOSS_Console("    %d, %d\n", ProcTable[slot].pid, ProcTable[slot].ppid);
 
+
+if(debugflag3v) USLOSS_Console("    process %d: sending message to %d\n", getpid(), kidpid);
+
+    // announce that you set the child's values
+    MboxSend(ProcTable[slot].spawnBox, NULL, 0);
+
+if(debugflag3v) USLOSS_Console("    process %d: sent message\n", getpid());
+
+    // release the mutex
+    MboxReceive(ptMutex, NULL, 0);
+   
     return kidpid;
 }
 
 int spawnLaunch(char *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: spawnLaunch\n", getpid());
+    }
+
+if(debugflag3v) USLOSS_Console("    process %d: receiving message\n", getpid());
+
+    // block and allow the parent to set our values
+    MboxReceive(ProcTable[getpid() % MAXPROC].spawnBox, NULL, 0);
+
+    // get ourselves in the process table
     process me = ProcTable[getpid() % MAXPROC];
 
-    me.pid = getpid();
+if(debugflag3v) USLOSS_Console("    process %d: received message from %d\n", getpid(), me.ppid);
 
-    MboxReceive(me.mbox, NULL, 0);
-
+    // set up a return value
     int result = -1;
+
+    // if we weren't zapped run normally and quit
     if (!isZapped()) {
+        // switch to usermode
         setUserMode();
 
+        // get the arguments we need to do stuff will
         int (*func)(char *) = me.start_func;
         char arg[MAXARG];
         strcpy(arg, me.startArg);
 
+        // run the function with its args
         result = (func)(arg);
-    
+
+        // quit
         Terminate(result);
     }
+    // otherwise, just quit
     else {
         terminateReal(0);
     }
@@ -282,114 +377,215 @@ int spawnLaunch(char *args) {
     return result;
 }
 
-int waitReal(int *status) {
+int waitReal(long *status) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: waitReal\n", getpid());
+    }
+
+/*
+    // check for no children
+    if (ProcTable[getpid() % MAXPROC].numKids == 0) {
+        return -1;
+    }
+*/
+
     int result = join(status);
-setUserMode();
     return result;
 }
 
 void terminateReal(int status) {
-    if (ProcTable[getpid() % MAXPROC].numKids == 0) {
-        quit(status);
-setUserMode();
-        return;
+    if (debugflag3) {
+        USLOSS_Console("process %d: terminateReal\n", getpid());
     }
 
-    // go through all children
-    for (int i = 0; i < ProcTable[getpid()].numKids; i++) {
-        // zap child
-        zap(ProcTable[getpid()].childProcPtr->pid);
+    // get the current process
+    process me = ProcTable[getpid() % MAXPROC];
+
+    // if you have children, get rid of them
+    if (me.numKids != 0) {
+
+        // go through all children
+        for (int i = 0; i < me.numKids; i++) {
+            // zap child
+            zap(me.childProcPtr->pid);
         
-        // remove child
-        ProcTable[getpid()].childProcPtr = ProcTable[getpid()].childProcPtr->nextSiblingPtr;
-    }
+            // remove child
+            me.childProcPtr = me.childProcPtr->nextSiblingPtr;
+        }
 
-    // remove this process from its parents list of processes
-    procPtr parent = &ProcTable[ProcTable[getpid()].ppid];
+        // remove this process from its parents list of processes
+        procPtr parent = &ProcTable[me.ppid];
+        for (procPtr child = parent->childProcPtr; child->nextSiblingPtr != NULL; 
+             child = child->nextSiblingPtr) {
+            // find yourself in your parents child list
+            if (child->nextSiblingPtr->pid == getpid()) {
+                // derefrence yourself in the list
+                child->nextSiblingPtr = child->nextSiblingPtr->nextSiblingPtr;
 
-    for (procPtr child = parent->childProcPtr; child->nextSiblingPtr != NULL; 
-                                                child = child->nextSiblingPtr) {
-        // find yourself in your parents child list
-        if (child->nextSiblingPtr->pid == getpid()) {
-            // derefrence yourself in the list
-            child->nextSiblingPtr = child->nextSiblingPtr->nextSiblingPtr;
+                // dec the parents kids
+                parent->numKids--;
 
-            // dec the parents kids
-            parent->numKids--;
-
-            break;
+                // leave the loop
+                break;
+            }
+        }
+    
+        // wait for all children to to finish terminating before leaving
+        for (int i = 0; i < me.numKids; i++) {
+            MboxReceive(me.quitBox, NULL, 0);
         }
     }
 
-    // wait for all children to to finish terminating before leaving
-    //can we even mbox receive? how will children send?
+    // send to parent that you quit and remove yourself from their list of children
+    int ppid = me.ppid;
+    MboxSend(ProcTable[ppid].quitBox, NULL, 0);
+    removeChild(me.ppid, me.pid);
+
+    // clear out this processes process table
+    int slot = me.pid % MAXPROC;
+    ProcTable[slot].childProcPtr = NULL;
+    ProcTable[slot].nextSiblingPtr = NULL;
+    ProcTable[slot].name[0] = '\0';
+    ProcTable[slot].startArg[0] = '\0';
+    ProcTable[slot].pid = -1;
+    ProcTable[slot].ppid = -1;
+    ProcTable[slot].priority = -1;
+    ProcTable[slot].start_func = NULL;
+    ProcTable[slot].stackSize = -1;
+    ProcTable[slot].numKids = 0;
+    MboxRelease(ProcTable[slot].spawnBox);
+    MboxRelease(ProcTable[slot].spawnBox);
+    ProcTable[slot].spawnBox = MboxCreate(0, MAXLINE);
+    ProcTable[slot].quitBox = MboxCreate(MAXPROC, MAXLINE);
 
     // quit
     quit(status);
-setUserMode();
 }
 
 int semCreateReal(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: semCreateReal\n", getpid());
+    }
+
     return 0;
 }
 
 int semPReal(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: semPReal\n", getpid());
+    }
+
     return 0;
 }
 
 int semVReal(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: semVReal\n", getpid());
+    }
+
     return 0;
 }
 
 int semFreeReal(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: semFreeReal\n", getpid());
+    }
+
     return 0;
 }
 
-void getTimeofDayReal(systemArgs *args) {
+void getTimeOfDayReal(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: getTimeOfDayReal\n", getpid());
+    }
+
     return;
 }
 
 void cpuTimeReal(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: cpuTimeReal\n", getpid());
+    }
+
     return;
 }
 
 void getPIDReal(systemArgs *args) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: getPIDReal\n", getpid());
+    }
+
     return;
 }
 
 void addChild(int parentID, int childID) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: addChild\n", getpid());
+
+        if(debugflag3v) {
+            int kids = ProcTable[parentID % MAXPROC].numKids;
+            USLOSS_Console("    parent: %d, child: %d\n", parentID, childID);
+            USLOSS_Console("    before add: parent has %d kids\n", kids);
+        }
+    }
+
+    // readjust the input to align with the table
+    parentID %= MAXPROC;
+    childID %= MAXPROC;
+
+    // inc the number of kids
     ProcTable[parentID].numKids++;
 
+    // if the parent has no kids, set the child as the parents child
     if (ProcTable[parentID].childProcPtr == NULL) {
         ProcTable[parentID].childProcPtr = &ProcTable[childID];
     }
+    // if the parent does have kids, find its last kid and append the child to that last kids's next
     else {
         procPtr child;
-        for (child = ProcTable[parentID].childProcPtr; child->nextSiblingPtr != NULL; child = child->nextSiblingPtr) {}
+        for (child = ProcTable[parentID].childProcPtr; child->nextSiblingPtr != NULL; 
+             child = child->nextSiblingPtr) {}
 
         child->nextSiblingPtr = &ProcTable[childID];
     }
 }
-/*
-static void syscallHandler(int dev, void *args) {
-    // get args
-    systemArgs *sysPtr = (systemArgs *) args;
 
-    // check if valid dev
-    if (dev != USLOSS_SYSCALL_INT) {
-        USLOSS_Console("syscallHandler(): Bad call\n");
-        USLOSS_Halt(1);
+void removeChild(int parentID, int childID) {
+    if (debugflag3) {
+        USLOSS_Console("process %d: removeChild\n", getpid());
+        
+        if(debugflag3v) {
+            int kids = ProcTable[parentID % MAXPROC].numKids;
+            USLOSS_Console("    parent: %d, child: %d\n", parentID, childID);
+            USLOSS_Console("    before remove: parent has %d kids\n", kids);
+        }
     }
 
-    // check if valid range of args
-    if (sysPtr->number < 0 || sysPtr->number >= MAXSYSCALLS) {
-        USLOSS_Console("syscallHandler(): sys number %d is wrong.  Halting...\n", sysPtr->number);
-        USLOSS_Halt(1);
-    }
+    // readjust the input to align with the table
+    parentID %= MAXPROC;
+    childID %= MAXPROC;
 
-    USLOSS_PsrSet( USLOSS_PsrGet() | USLOSS_PSR_CURRENT_INT);
-    sys_vec[sysPtr->number](sysPtr);
-}*/
+    // dec the number of kid
+    ProcTable[parentID].numKids--;
+
+    // find the child and derefrence them
+    // if the child is the parent's first child
+    if (ProcTable[parentID].childProcPtr->pid == childID) {
+        // swap the parent's first child with its next sibling
+        ProcTable[parentID].childProcPtr = ProcTable[parentID].childProcPtr->nextSiblingPtr;
+    }
+    // otherwise
+    else {
+        procPtr child;
+        for (child = ProcTable[parentID].childProcPtr; child->nextSiblingPtr != NULL; 
+             child = child->nextSiblingPtr) {
+            if (child->nextSiblingPtr->pid == childID) {
+                child->nextSiblingPtr = child->nextSiblingPtr->nextSiblingPtr;
+            }
+        }
+    }
+}
+
 /*
  * setUserMode:
  *  kernel --> user
