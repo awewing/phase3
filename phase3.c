@@ -38,7 +38,7 @@ int spawnReal(char *name, int(*func)(char *), char *arg, unsigned int stackSize,
 int spawnLaunch(char *args);
 int waitReal(long *status);
 void terminateReal(int status);
-int semCreateReal(systemArgs *args);
+int semCreateReal(int size);
 int semPReal(systemArgs *args);
 int semVReal(systemArgs *args);
 int semFreeReal(systemArgs *args);
@@ -63,6 +63,9 @@ int stMutex;
 
 int numProcs = 3;
 int current = 3;
+
+int numSems = 0;
+int nextSem = 0;
 /* ------------------------- Functions ------------------------------------ */
 int start2(char *arg) {
     // Check kernel mode here.
@@ -105,6 +108,7 @@ int start2(char *arg) {
 
     // initialize SemTable
     for (int i = 0; i < MAXSEMS; i++) {
+        SemTable[i].mboxID = -1;
     }
 
     // create mutex mailbox
@@ -244,7 +248,16 @@ static void semCreate(systemArgs *args) {
         USLOSS_Console("process %d: semCreate\n", getpid());
     }
 
-//    semCreateReal();
+    // real call
+    int address = semCreateReal(args->arg1);
+
+    if (address == -1) {
+        args->arg4 = -1;
+        args->arg1 = NULL;
+    } else {
+        args->arg4 = 0;
+        args->arg1 = address;
+    }
 }
 
 static void semP(systemArgs *args) {
@@ -462,12 +475,29 @@ void terminateReal(int status) {
     quit(status);
 }
 
-int semCreateReal(systemArgs *args) {
+int semCreateReal(int size) {
     if (debugflag3) {
         USLOSS_Console("process %d: semCreateReal\n", getpid());
     }
 
-    return 0;
+    // Check maxsems
+    if (numSems >= MAXSEMS) {
+        return -1;
+    }
+
+    // attempt to create an mbox of size zero
+    int mboxID = MboxCreate(size, 0);
+
+    if (mboxID == -1) {
+        //no box created.
+        return -1;
+    } else {
+        // New entry in sem table
+        numSems++;
+        int nextSem = getNextSem();
+        SemTable[nextSem].mboxID = mboxID;
+        return nextSem;
+    }
 }
 
 int semPReal(systemArgs *args) {
@@ -602,4 +632,15 @@ void check_kernel_mode(char *name) {
         USLOSS_Console("%s(): Called while in user mode by process %d. Halting...\n", name, getpid());
         USLOSS_Halt(1);
     }
+}
+
+/*
+ * Get next semaphore on the semaphore table.
+ */
+int getNextSem() {
+    while (SemTable[nextSem].mboxID != -1) {
+        nextSem++;
+    }
+
+    return nextSem;
 }

@@ -24,5 +24,5 @@ struct procStruct {
 };
 
 struct semStruct {
-    
+   int             mboxID;
 };
