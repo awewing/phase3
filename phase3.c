@@ -42,18 +42,19 @@ int semCreateReal(int value);
 int semPReal(int semID);
 int semVReal(int semID);
 int semFreeReal(systemArgs *args);
-void getTimeOfDayReal(systemArgs *args);
-void cpuTimeReal(systemArgs *args);
-void getPIDReal(systemArgs *args);
+int getTimeOfDayReal();
+int cpuTimeReal();
+int getPIDReal();
 
 void addChild(int parentID, int childID);
 void removeChild(int parentID, int childID);
 
 void setUserMode();
 void check_kernel_mode(char* name);
+int getNextSem();
 /* ------------------------- Globals ------------------------------------ */
-int debugflag3 = 1;
-int debugflag3v = 1;
+int debugflag3 = 0;
+int debugflag3v = 0;
 
 process ProcTable[MAXPROC];
 semaphore SemTable[MAXSEMS];
@@ -306,7 +307,7 @@ static void getTimeOfDay(systemArgs *args) {
         USLOSS_Console("process %d: getTimeOfDay\n", getpid());
     }
 
-//    getTimeOfDayReal();
+    args->arg1 = getTimeOfDayReal();
 }
 
 static void cpuTime(systemArgs *args) {
@@ -314,7 +315,7 @@ static void cpuTime(systemArgs *args) {
         USLOSS_Console("process %d: cpuTime\n", getpid());
     }
 
-//    cpuTimeReal();
+    args->arg1 = cpuTimeReal();
 }
 
 static void getPID(systemArgs *args) {
@@ -322,7 +323,7 @@ static void getPID(systemArgs *args) {
         USLOSS_Console("process %d: getPID\n", getpid());
     }
 
-//    getPIDReal();
+    args->arg1 = getPIDReal();
 }
 
 int spawnReal(char *name, int(*func)(char *), char *arg, unsigned int stackSize, int priority) {
@@ -623,28 +624,28 @@ int semFreeReal(systemArgs *args) {
     return 0;
 }
 
-void getTimeOfDayReal(systemArgs *args) {
+int getTimeOfDayReal() {
     if (debugflag3) {
         USLOSS_Console("process %d: getTimeOfDayReal\n", getpid());
     }
 
-    return;
+    return readtime();
 }
 
-void cpuTimeReal(systemArgs *args) {
+int cpuTimeReal() {
     if (debugflag3) {
         USLOSS_Console("process %d: cpuTimeReal\n", getpid());
     }
 
-    return;
+    return -1;
 }
 
-void getPIDReal(systemArgs *args) {
+int getPIDReal() {
     if (debugflag3) {
         USLOSS_Console("process %d: getPIDReal\n", getpid());
     }
 
-    return;
+    return getpid();
 }
 
 void addChild(int parentID, int childID) {
