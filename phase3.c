@@ -41,7 +41,7 @@ void terminateReal(int status);
 int semCreateReal(int value);
 int semPReal(int semID);
 int semVReal(int semID);
-int semFreeReal(systemArgs *args);
+int semFreeReal(int semID);
 int getTimeOfDayReal();
 int cpuTimeReal();
 int getPIDReal();
@@ -299,7 +299,12 @@ static void semFree(systemArgs *args) {
         USLOSS_Console("process %d: semFree\n", getpid());
     }
 
-//    semFreeReal();
+    int semID = args->arg1;
+    if (semID == -1) {
+        args->arg4 = -1;
+    } else {
+        args->arg4 = semFreeReal(semID);
+    }
 }
 
 static void getTimeOfDay(systemArgs *args) {
@@ -616,11 +621,24 @@ int semVReal(int semID) {
     return 0;
 }
 
-int semFreeReal(systemArgs *args) {
+int semFreeReal(int semID) {
     if (debugflag3) {
         USLOSS_Console("process %d: semFreeReal\n", getpid());
     }
 
+    if (SemTable[semID].mutexBox == -1) {
+        return -1;
+    }
+
+    MboxRelease(SemTable[semID].mutexBox);
+    MboxRelease(SemTable[semID].blockedBox);
+
+    SemTable[semID].mutexBox = -1;
+    SemTable[semID].blockedBox = -1;
+    SemTable[semID].value = -1;
+    SemTable[semID].blocked = 0;
+
+    numSems--;
     return 0;
 }
 
