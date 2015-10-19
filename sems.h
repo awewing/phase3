@@ -24,5 +24,8 @@ struct procStruct {
 };
 
 struct semStruct {
-   int             mboxID;
+   int             mutexBox;          // used for mutex in semaphores
+   int             blockedBox;        // used for P and V to meet in case of block on P
+   int             value;
+   int             blocked;           // number of processes blocked on P
 };

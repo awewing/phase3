@@ -38,9 +38,9 @@ int spawnReal(char *name, int(*func)(char *), char *arg, unsigned int stackSize,
 int spawnLaunch(char *args);
 int waitReal(long *status);
 void terminateReal(int status);
-int semCreateReal(int size);
-int semPReal(systemArgs *args);
-int semVReal(systemArgs *args);
+int semCreateReal(int value);
+int semPReal(int semID);
+int semVReal(int semID);
 int semFreeReal(systemArgs *args);
 void getTimeOfDayReal(systemArgs *args);
 void cpuTimeReal(systemArgs *args);
@@ -52,8 +52,8 @@ void removeChild(int parentID, int childID);
 void setUserMode();
 void check_kernel_mode(char* name);
 /* ------------------------- Globals ------------------------------------ */
-int debugflag3 = 0;
-int debugflag3v = 0;
+int debugflag3 = 1;
+int debugflag3v = 1;
 
 process ProcTable[MAXPROC];
 semaphore SemTable[MAXSEMS];
@@ -108,7 +108,10 @@ int start2(char *arg) {
 
     // initialize SemTable
     for (int i = 0; i < MAXSEMS; i++) {
-        SemTable[i].mboxID = -1;
+        SemTable[i].mutexBox = -1;
+        SemTable[i].blockedBox = -1;
+        SemTable[i].value = 0;
+        SemTable[i].blocked = 0;
     }
 
     // create mutex mailbox
@@ -264,8 +267,15 @@ static void semP(systemArgs *args) {
     if (debugflag3) {
         USLOSS_Console("process %d: semP\n", getpid());
     }
+    
+    // input
+    int semID = args->arg1;
 
-//    semPReal();
+    // real call
+    int result = semPReal(semID);
+
+    // output
+    args->arg4 = result;
 }
 
 static void semV(systemArgs *args) {
@@ -273,7 +283,14 @@ static void semV(systemArgs *args) {
         USLOSS_Console("process %d: semV\n", getpid());
     }
 
-//    semVReal();
+    // input
+    int semID = args->arg1;
+
+    // real call
+    int result = semVReal(semID);
+
+    // output
+    args->arg4 = result;
 }
 
 static void semFree(systemArgs *args) {
@@ -475,7 +492,7 @@ void terminateReal(int status) {
     quit(status);
 }
 
-int semCreateReal(int size) {
+int semCreateReal(int value) {
     if (debugflag3) {
         USLOSS_Console("process %d: semCreateReal\n", getpid());
     }
@@ -485,34 +502,116 @@ int semCreateReal(int size) {
         return -1;
     }
 
-    // attempt to create an mbox of size zero
-    int mboxID = MboxCreate(size, 0);
+    // attempt to create a mutex mbox for the semaphore
+    int mutexBox = MboxCreate(1, 0);
 
-    if (mboxID == -1) {
-        //no box created.
+    if (mutexBox == -1) {
+        //no mutexbox created.
         return -1;
-    } else {
-        // New entry in sem table
-        numSems++;
-        int nextSem = getNextSem();
-        SemTable[nextSem].mboxID = mboxID;
-        return nextSem;
+    } 
+
+    // attempt to create mbox for P blocks
+    int blockedBox = MboxCreate(0, 0);
+
+    if (blockedBox == -1) {
+        // no blockedbox created
+        return -1;
     }
+
+    // New entry in sem table
+    numSems++;
+    int sem = getNextSem();
+    SemTable[sem].mutexBox = mutexBox;
+    SemTable[sem].blockedBox = blockedBox;
+    SemTable[sem].value = value;
+    SemTable[sem].blocked = 0;
+    return sem;
 }
 
-int semPReal(systemArgs *args) {
+int semPReal(int semID) {
     if (debugflag3) {
         USLOSS_Console("process %d: semPReal\n", getpid());
     }
 
+    if (SemTable[semID].mutexBox == -1) {
+        return -1;
+    }
+
+    // get handles for mboxes in the semaphore struct
+    int mutexBox = SemTable[semID].mutexBox;
+    int blockedBox = SemTable[semID].blockedBox;
+    
+    // enter critical section
+    MboxSend(mutexBox, NULL, 0);
+    if (debugflag3) {
+        USLOSS_Console("process %d: in critical section\n", getpid());
+    }
+
+    // while there is not a resource to grab (value = 0)
+    while ( SemTable[semID].value <= 0 ) {
+        // must block ourselves
+        SemTable[semID].blocked++;
+
+        // exit critical section to allow semV to happen
+        MboxReceive(mutexBox, NULL, 0);
+
+        // block on zero slot mailbox, will meet up with semV here
+        if (debugflag3) {
+            USLOSS_Console("process %d: blocking on P\n", getpid());
+        }
+        MboxSend(blockedBox, NULL, 0);
+
+        if (debugflag3) {
+            USLOSS_Console("process %d: Unblocked on P\n", getpid());
+        }
+        // return to critical section
+        MboxSend(mutexBox, NULL, 0);
+        if (debugflag3) {
+            USLOSS_Console("process %d: in critical section\n", getpid());
+        }
+    }
+
+    // take resource (decrement v)
+    SemTable[semID].value--;
+    // exit critical section
+    MboxReceive(mutexBox, NULL, 0);
+
     return 0;
 }
 
-int semVReal(systemArgs *args) {
+int semVReal(int semID) {
     if (debugflag3) {
         USLOSS_Console("process %d: semVReal\n", getpid());
     }
 
+    if (SemTable[semID].mutexBox == -1) {
+        return -1;
+    }
+
+    // get handles for mboxes in the semaphore struct
+    int mutexBox = SemTable[semID].mutexBox;
+    int blockedBox = SemTable[semID].blockedBox;
+    
+    // enter critical section
+    MboxSend(mutexBox, NULL, 0);
+    if (debugflag3) {
+        USLOSS_Console("process %d: in critical section\n", getpid());
+    }
+
+    // increment value
+    SemTable[semID].value++;
+
+    // Unblock any proc blocked on P
+    if (SemTable[semID].blocked > 0) {
+        // may have to wait for semP here
+        if (debugflag3) {
+            USLOSS_Console("process %d: freeing process blocked on P\n", getpid());
+        }
+        MboxReceive(blockedBox, NULL, 0);
+        SemTable[semID].blocked--;
+    }
+
+    MboxReceive(mutexBox, NULL, 0);
     return 0;
 }
 
@@ -638,8 +737,11 @@ void check_kernel_mode(char *name) {
  * Get next semaphore on the semaphore table.
  */
 int getNextSem() {
-    while (SemTable[nextSem].mboxID != -1) {
+    while (SemTable[nextSem].mutexBox != -1) {
         nextSem++;
+        if (nextSem >= MAXSEMS) {
+            nextSem = 0;
+        }
     }
 
     return nextSem;
