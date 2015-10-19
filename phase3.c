@@ -253,14 +253,14 @@ static void semCreate(systemArgs *args) {
     }
 
     // real call
-    int address = semCreateReal(args->arg1);
+    long address = semCreateReal((long) args->arg1);
 
     if (address == -1) {
-        args->arg4 = -1;
+        args->arg4 = (void *) -1L;
         args->arg1 = NULL;
     } else {
         args->arg4 = 0;
-        args->arg1 = address;
+        args->arg1 = (void *) address;
     }
 }
 
@@ -270,13 +270,13 @@ static void semP(systemArgs *args) {
     }
     
     // input
-    int semID = args->arg1;
+    int semID = (long) args->arg1;
 
     // real call
-    int result = semPReal(semID);
+    long result = semPReal(semID);
 
     // output
-    args->arg4 = result;
+    args->arg4 = (void *) result;
 }
 
 static void semV(systemArgs *args) {
@@ -285,13 +285,13 @@ static void semV(systemArgs *args) {
     }
 
     // input
-    int semID = args->arg1;
+    int semID = (long) args->arg1;
 
     // real call
-    int result = semVReal(semID);
+    long result = semVReal(semID);
 
     // output
-    args->arg4 = result;
+    args->arg4 = (void *) result;
 }
 
 static void semFree(systemArgs *args) {
@@ -299,11 +299,13 @@ static void semFree(systemArgs *args) {
         USLOSS_Console("process %d: semFree\n", getpid());
     }
 
-    int semID = args->arg1;
+    int semID = (long) args->arg1;
+
     if (semID == -1) {
-        args->arg4 = -1;
+        args->arg4 = (void *) -1L;
     } else {
-        args->arg4 = semFreeReal(semID);
+        long result = semFreeReal(semID);
+        args->arg4 = (void *) result;
     }
 }
 
@@ -312,7 +314,8 @@ static void getTimeOfDay(systemArgs *args) {
         USLOSS_Console("process %d: getTimeOfDay\n", getpid());
     }
 
-    args->arg1 = getTimeOfDayReal();
+    long result = getTimeOfDayReal();
+    args->arg1 = (void *) result;
 }
 
 static void cpuTime(systemArgs *args) {
@@ -320,7 +323,8 @@ static void cpuTime(systemArgs *args) {
         USLOSS_Console("process %d: cpuTime\n", getpid());
     }
 
-    args->arg1 = cpuTimeReal();
+    long result = cpuTimeReal();
+    args->arg1 = (void *) result;
 }
 
 static void getPID(systemArgs *args) {
@@ -328,7 +332,8 @@ static void getPID(systemArgs *args) {
         USLOSS_Console("process %d: getPID\n", getpid());
     }
 
-    args->arg1 = getPIDReal();
+    long result = getPIDReal();
+    args->arg1 = (void *) result;
 }
 
 int spawnReal(char *name, int(*func)(char *), char *arg, unsigned int stackSize, int priority) {
