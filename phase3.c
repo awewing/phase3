@@ -542,6 +542,10 @@ int semCreateReal(int value) {
 int semPReal(int semID) {
     if (debugflag3) {
         USLOSS_Console("process %d: semPReal\n", getpid());
+
+        if (debugflag3v) {
+            USLOSS_Console("	sem %d\n", semID);
+        }
     }
 
     if (SemTable[semID].mutexBox == -1) {
@@ -593,6 +597,10 @@ int semPReal(int semID) {
 int semVReal(int semID) {
     if (debugflag3) {
         USLOSS_Console("process %d: semVReal\n", getpid());
+
+        if (debugflag3v) {
+            USLOSS_Console("    sem %d\n", semID);
+        }
     }
 
     if (SemTable[semID].mutexBox == -1) {
@@ -706,7 +714,7 @@ void addChild(int parentID, int childID) {
 void removeChild(int parentID, int childID) {
     if (debugflag3) {
         USLOSS_Console("process %d: removeChild\n", getpid());
-        
+
         if(debugflag3v) {
             int kids = ProcTable[parentID % MAXPROC].numKids;
             USLOSS_Console("    parent: %d, child: %d\n", parentID, childID);
@@ -734,6 +742,7 @@ void removeChild(int parentID, int childID) {
              child = child->nextSiblingPtr) {
             if (child->nextSiblingPtr->pid == childID) {
                 child->nextSiblingPtr = child->nextSiblingPtr->nextSiblingPtr;
+                break;
             }
         }
     }
