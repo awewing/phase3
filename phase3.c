@@ -360,15 +360,12 @@ int spawnReal(char *name, int(*func)(char *), char *arg, unsigned int stackSize,
     // add child to the cirrent process
     addChild(getpid(), kidpid);
 
-if(debugflag3v) USLOSS_Console("    %d, %d\n", ProcTable[slot].pid, ProcTable[slot].ppid);
-
-
-if(debugflag3v) USLOSS_Console("    process %d: sending message to %d\n", getpid(), kidpid);
+    if(debugflag3v) USLOSS_Console("    process %d: sending message to %d\n", getpid(), kidpid);
 
     // announce that you set the child's values
     MboxSend(ProcTable[slot].spawnBox, NULL, 0);
 
-if(debugflag3v) USLOSS_Console("    process %d: sent message\n", getpid());
+    if(debugflag3v) USLOSS_Console("    process %d: sent message\n", getpid());
 
     // release the mutex
     MboxReceive(ptMutex, NULL, 0);
@@ -381,7 +378,7 @@ int spawnLaunch(char *args) {
         USLOSS_Console("process %d: spawnLaunch\n", getpid());
     }
 
-if(debugflag3v) USLOSS_Console("    process %d: receiving message\n", getpid());
+    if(debugflag3v) USLOSS_Console("    process %d: receiving message\n", getpid());
 
     // block and allow the parent to set our values
     MboxReceive(ProcTable[getpid() % MAXPROC].spawnBox, NULL, 0);
@@ -389,7 +386,7 @@ if(debugflag3v) USLOSS_Console("    process %d: receiving message\n", getpid());
     // get ourselves in the process table
     process me = ProcTable[getpid() % MAXPROC];
 
-if(debugflag3v) USLOSS_Console("    process %d: received message from %d\n", getpid(), me.ppid);
+    if(debugflag3v) USLOSS_Console("    process %d: received message from %d\n", getpid(), me.ppid);
 
     // set up a return value
     int result = -1;
@@ -562,6 +559,7 @@ int semPReal(int semID) {
         USLOSS_Console("process %d: in critical section\n", getpid());
     }
 
+    int broke = 0;
     // while there is not a resource to grab (value = 0)
     while ( SemTable[semID].value <= 0 ) {
         // must block ourselves
@@ -574,11 +572,19 @@ int semPReal(int semID) {
         if (debugflag3) {
             USLOSS_Console("process %d: blocking on P\n", getpid());
         }
+
         MboxSend(blockedBox, NULL, 0);
+
+        // if after coming back from being blocked the semaphore no longer exists, get out
+        if (SemTable[semID].mutexBox == -1) {
+            broke = 1;
+            break;
+        }
 
         if (debugflag3) {
             USLOSS_Console("process %d: Unblocked on P\n", getpid());
         }
+
         // return to critical section
         MboxSend(mutexBox, NULL, 0);
         if (debugflag3) {
@@ -586,10 +592,16 @@ int semPReal(int semID) {
         }
     }
 
-    // take resource (decrement v)
-    SemTable[semID].value--;
-    // exit critical section
-    MboxReceive(mutexBox, NULL, 0);
+    // only do this if the loop wasn't broken prematurly
+    if (!broke) {
+        // take resource (decrement v)
+        SemTable[semID].value--;
+        // exit critical section
+        MboxReceive(mutexBox, NULL, 0);
+    }
+    else {
+        terminateReal(1);
+    }
 
     return 0;
 }
@@ -639,20 +651,42 @@ int semFreeReal(int semID) {
         USLOSS_Console("process %d: semFreeReal\n", getpid());
     }
 
+    // if the specified table was empty
     if (SemTable[semID].mutexBox == -1) {
         return -1;
     }
 
-    MboxRelease(SemTable[semID].mutexBox);
-    MboxRelease(SemTable[semID].blockedBox);
-
+    // start remove the semaphores from the table
     SemTable[semID].mutexBox = -1;
+
+    // return value
+    int result = 0;
+
+    // check for blocked processes
+    if (SemTable[semID].blocked > 0) {
+        // change ret value
+        result = 1;
+
+        // wake any blocked
+        for (int i = 0; i < SemTable[semID].blocked; i++) {
+            MboxReceive(SemTable[semID].blockedBox, NULL, 0);
+        }
+    }
+
+    // remove the rest of the semaphore from the table
     SemTable[semID].blockedBox = -1;
     SemTable[semID].value = -1;
     SemTable[semID].blocked = 0;
 
+    // release the semaphores
+    MboxRelease(SemTable[semID].mutexBox);
+    MboxRelease(SemTable[semID].blockedBox);
+
+    // dec how many semaphores in use
     numSems--;
-    return 0;
+
+    // return our ret value
+    return result;
 }
 
 int getTimeOfDayReal() {
@@ -660,7 +694,7 @@ int getTimeOfDayReal() {
         USLOSS_Console("process %d: getTimeOfDayReal\n", getpid());
     }
 
-    return readtime();
+    return USLOSS_Clock();
 }
 
 int cpuTimeReal() {
@@ -668,7 +702,7 @@ int cpuTimeReal() {
         USLOSS_Console("process %d: cpuTimeReal\n", getpid());
     }
 
-    return -1;
+    return readtime();
 }
 
 int getPIDReal() {
