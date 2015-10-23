@@ -59,11 +59,7 @@ int debugflag3v = 0;
 process ProcTable[MAXPROC];
 semaphore SemTable[MAXSEMS];
 
-int ptMutex;
-int stMutex;
-
 int numProcs = 3;
-int current = 3;
 
 int numSems = 0;
 int nextSem = 0;
@@ -103,8 +99,7 @@ int start2(char *arg) {
         ProcTable[i].start_func = NULL;
         ProcTable[i].stackSize = -1;
         ProcTable[i].numKids = 0;
-        ProcTable[i].spawnBox = MboxCreate(0, MAXLINE);
-        ProcTable[i].quitBox = MboxCreate(MAXPROC, MAXLINE);
+        ProcTable[i].spawnBox = MboxCreate(1, MAXLINE);
     }
 
     // initialize SemTable
@@ -114,10 +109,6 @@ int start2(char *arg) {
         SemTable[i].value = 0;
         SemTable[i].blocked = 0;
     }
-
-    // create mutex mailbox
-    ptMutex = MboxCreate(1, 0);
-    stMutex = MboxCreate(1, 0);
 
     /*
      * Create first user-level process and wait for it to finish.
@@ -176,6 +167,9 @@ static void spawn(systemArgs *args) {
         USLOSS_Console("process %d: spawn\n", getpid());
     }
 
+    // inc total number of procs
+    numProcs++;
+
     // values to send to spawn real
     char *name;
     int (*func)(char *);
@@ -184,7 +178,13 @@ static void spawn(systemArgs *args) {
     int priority;
 
     // check values are real
+    if (numProcs > MAXPROC) {
         // if not set args4 = -1 and return
+        args->arg4 = (void *) -1L;
+
+        numProcs--;
+        return;
+    }
 
     // all values good, assign them
     name = args->arg5;
@@ -341,8 +341,7 @@ int spawnReal(char *name, int(*func)(char *), char *arg, unsigned int stackSize,
         USLOSS_Console("process %d: spawnReal\n", getpid());
     }
 
-    // block anyone from doing stuff with the process table
-    MboxSend(ptMutex, NULL, 0);
+    // fork
     int kidpid = fork1(name, spawnLaunch, arg, stackSize, priority);
 
     // add parameters to child's slot in the processtable
@@ -367,9 +366,11 @@ int spawnReal(char *name, int(*func)(char *), char *arg, unsigned int stackSize,
 
     if(debugflag3v) USLOSS_Console("    process %d: sent message\n", getpid());
 
-    // release the mutex
-    MboxReceive(ptMutex, NULL, 0);
-   
+    // check zap
+    if (isZapped()) {
+        terminateReal(0);
+    }
+
     return kidpid;
 }
 
@@ -396,7 +397,7 @@ int spawnLaunch(char *args) {
         // switch to usermode
         setUserMode();
 
-        // get the arguments we need to do stuff will
+        // get the arguments we need to do stuff with
         int (*func)(char *) = me.start_func;
         char arg[MAXARG];
         strcpy(arg, me.startArg);
@@ -420,14 +421,13 @@ int waitReal(long *status) {
         USLOSS_Console("process %d: waitReal\n", getpid());
     }
 
-/*
-    // check for no children
-    if (ProcTable[getpid() % MAXPROC].numKids == 0) {
-        return -1;
-    }
-*/
-
     int result = join(status);
+
+    // check zap
+    if (isZapped()) {
+        terminateReal(0);
+    }
+
     return result;
 }
 
@@ -441,42 +441,20 @@ void terminateReal(int status) {
 
     // if you have children, get rid of them
     if (me.numKids != 0) {
-
-        // go through all children
-        for (int i = 0; i < me.numKids; i++) {
-            // zap child
-            zap(me.childProcPtr->pid);
-        
-            // remove child
-            me.childProcPtr = me.childProcPtr->nextSiblingPtr;
+        int children[MAXPROC];
+        int i = 0;
+        for (procPtr child = me.childProcPtr; child != NULL; child = child->nextSiblingPtr) {
+            children[i] = child->pid;
+            i++;
         }
 
-        // remove this process from its parents list of processes
-        procPtr parent = &ProcTable[me.ppid];
-        for (procPtr child = parent->childProcPtr; child->nextSiblingPtr != NULL; 
-             child = child->nextSiblingPtr) {
-            // find yourself in your parents child list
-            if (child->nextSiblingPtr->pid == getpid()) {
-                // derefrence yourself in the list
-                child->nextSiblingPtr = child->nextSiblingPtr->nextSiblingPtr;
-
-                // dec the parents kids
-                parent->numKids--;
-
-                // leave the loop
-                break;
-            }
-        }
-    
-        // wait for all children to to finish terminating before leaving
+        // go through all children and zap them
         for (int i = 0; i < me.numKids; i++) {
-            MboxReceive(me.quitBox, NULL, 0);
+            zap(children[i]);
         }
     }
 
-    // send to parent that you quit and remove yourself from their list of children
-    int ppid = me.ppid;
-    MboxSend(ProcTable[ppid].quitBox, NULL, 0);
+    // remove yourself from their list of children
     removeChild(me.ppid, me.pid);
 
     // clear out this processes process table
@@ -492,12 +470,13 @@ void terminateReal(int status) {
     ProcTable[slot].stackSize = -1;
     ProcTable[slot].numKids = 0;
     MboxRelease(ProcTable[slot].spawnBox);
-    MboxRelease(ProcTable[slot].spawnBox);
     ProcTable[slot].spawnBox = MboxCreate(0, MAXLINE);
-    ProcTable[slot].quitBox = MboxCreate(MAXPROC, MAXLINE);
 
     // quit
     quit(status);
+
+    // dec num procs
+    numProcs--;
 }
 
 int semCreateReal(int value) {
@@ -575,6 +554,11 @@ int semPReal(int semID) {
 
         MboxSend(blockedBox, NULL, 0);
 
+        // check zap
+        if (isZapped()) {
+            terminateReal(0);
+        }
+
         // if after coming back from being blocked the semaphore no longer exists, get out
         if (SemTable[semID].mutexBox == -1) {
             broke = 1;
@@ -643,6 +627,12 @@ int semVReal(int semID) {
     }
 
     MboxReceive(mutexBox, NULL, 0);
+
+    // check zap
+    if (isZapped()) {
+        terminateReal(0);
+    }
+
     return 0;
 }
 
@@ -681,6 +671,11 @@ int semFreeReal(int semID) {
     // release the semaphores
     MboxRelease(SemTable[semID].mutexBox);
     MboxRelease(SemTable[semID].blockedBox);
+
+    // check zap
+    if (isZapped()) {
+        terminateReal(0);
+    }
 
     // dec how many semaphores in use
     numSems--;
@@ -757,22 +752,21 @@ void removeChild(int parentID, int childID) {
     }
 
     // readjust the input to align with the table
-    parentID %= MAXPROC;
-    childID %= MAXPROC;
+    int parentT = parentID % MAXPROC;
 
     // dec the number of kid
-    ProcTable[parentID].numKids--;
+    ProcTable[parentT].numKids--;
 
     // find the child and derefrence them
     // if the child is the parent's first child
-    if (ProcTable[parentID].childProcPtr->pid == childID) {
+    if (ProcTable[parentT].childProcPtr->pid == childID) {
         // swap the parent's first child with its next sibling
-        ProcTable[parentID].childProcPtr = ProcTable[parentID].childProcPtr->nextSiblingPtr;
+        ProcTable[parentT].childProcPtr = ProcTable[parentT].childProcPtr->nextSiblingPtr;
     }
     // otherwise
     else {
         procPtr child;
-        for (child = ProcTable[parentID].childProcPtr; child->nextSiblingPtr != NULL; 
+        for (child = ProcTable[parentT].childProcPtr; child->nextSiblingPtr != NULL; 
              child = child->nextSiblingPtr) {
             if (child->nextSiblingPtr->pid == childID) {
                 child->nextSiblingPtr = child->nextSiblingPtr->nextSiblingPtr;

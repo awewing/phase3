@@ -62,7 +62,8 @@ int Child2(char *arg)
     USLOSS_Console("%s(): spawned process %d\n", arg, pid);
     Spawn("Child2c", Child3, "Child2c", USLOSS_MIN_STACK, 5, &pid);
     USLOSS_Console("%s(): spawned process %d\n", arg, pid);
-    Terminate(10);
+   
+     Terminate(10);
 
     return 0;
 } /* Child2 */
